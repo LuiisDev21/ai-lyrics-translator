@@ -2,24 +2,23 @@
  * SettingsPanel — the extension's settings modal (styled, Spotify-like).
  *
  * What it does: opens a Spicetify `PopupModal` with a user-friendly settings
- * form: API key, model selector, target language, auto-translate, display
- * mode (segmented control) and typography, plus "Reset" and "Clear cache".
+ * form: provider selector (DeepSeek, OpenRouter, Gemini, Groq, custom
+ * endpoint, DeepL), per-provider API key, model suggestions, target language
+ * dropdown, auto-translate, display mode (segmented) and typography, plus
+ * "Reset" and "Clear cache".
  *
  * How it works: the form is a plain DOM tree passed straight to
  * `Spicetify.PopupModal.display` — the official API accepts a raw `Element`
  * as content (verified in `globals.d.ts`), so no React is needed. A scoped
- * `<style>` block (injected once) gives it a Spotify-like look: section
- * cards, an accent segmented control for the display mode, subtle inputs and
- * round buttons. Every control writes directly to the `ConfigStore` on
- * `change`/`input` (auto-save); the store validates and persists. Controls
- * are re-synced from the store after a reset.
+ * `<style>` block (injected once) gives it a Spotify-like look. Every control
+ * writes directly to the `ConfigStore` on `change`/`input` (auto-save); the
+ * store validates and persists.
  *
- * Design decisions:
- * - AI parameters: only the model selector is exposed (temperature, thinking
- *   mode, reasoning effort and timeout are constants in `DeepSeekProvider`,
- *   per the official DeepSeek docs — the user asked for a simple panel).
- * - Display mode is a segmented control (Original / Traducción / Ambas)
- *   instead of a select — clearer and more tactile.
+ * Provider-aware UI: switching the provider reloads the API-key field (each
+ * provider keeps its own key in `settings.providerKeys`), swaps the model
+ * suggestions (datalist — any model id is allowed), shows the base-URL field
+ * for the "custom" endpoint, and hides the model row for direct providers
+ * (DeepL).
  *
  * Why it exists: the only module that edits settings; it talks only to
  * `ConfigStore` + the caches (for "Clear cache") — no pipeline logic.
@@ -31,12 +30,13 @@
 import { createElement } from "../utils/Dom";
 import type { ConfigStore } from "../settings/ConfigStore";
 import {
-  DEEPSEEK_MODELS,
   DISPLAY_MODES,
   TARGET_LANGUAGES,
   type DisplayMode,
   type Settings,
 } from "../settings/Settings";
+import { PROVIDERS, getProvider } from "../providers/registry";
+import type { TranslationProvider } from "../providers/types";
 import type { MemoryCache } from "../cache/MemoryCache";
 import type { PersistentCache } from "../cache/PersistentCache";
 
@@ -64,6 +64,7 @@ const PANEL_STYLES = `
 .ailt-label { color: var(--spice-subtext); font-size: 12px; white-space: nowrap; }
 .ailt-input { background: rgba(0,0,0,0.4); border: 1px solid rgba(255,255,255,0.12); border-radius: 6px; color: var(--spice-text); padding: 6px 10px; font-size: 12px; min-width: 0; flex: 1; max-width: 220px; transition: border-color 0.15s ease, box-shadow 0.15s ease; }
 .ailt-input:focus { outline: none; border-color: var(--spice-button); box-shadow: 0 0 0 2px color-mix(in srgb, var(--spice-button) 30%, transparent); }
+.ailt-input:disabled { opacity: 0.45; cursor: not-allowed; }
 .ailt-input[type="color"] { padding: 2px 4px; height: 30px; width: 60px; cursor: pointer; }
 .ailt-input[type="range"] { accent-color: var(--spice-button); }
 .ailt-check { accent-color: var(--spice-button); width: 16px; height: 16px; cursor: pointer; }
@@ -73,6 +74,8 @@ const PANEL_STYLES = `
 .ailt-seg-btn.is-active { background: var(--spice-button); color: var(--spice-text); }
 .ailt-btn { border: none; border-radius: 16px; padding: 6px 16px; font-size: 12px; cursor: pointer; background: rgba(255,255,255,0.1); color: var(--spice-text); transition: background 0.15s ease; }
 .ailt-btn:hover { background: rgba(255,255,255,0.18); }
+.ailt-btn.is-primary { background: var(--spice-button); color: var(--spice-text); font-weight: 600; }
+.ailt-btn.is-primary:hover { background: var(--spice-button); filter: brightness(1.12); }
 .ailt-btn.is-danger { color: var(--spice-notification-error, #f15e6c); }
 .ailt-btn.is-danger:hover { background: rgba(241,94,108,0.12); }
 .ailt-hint { font-size: 11px; color: var(--spice-subtext); opacity: 0.8; margin-top: -4px; }
@@ -101,9 +104,22 @@ function buildSettingsForm(deps: SettingsPanelDeps): HTMLElement {
     deps.store.update(patch);
   };
 
-  // --- API key -------------------------------------------------------------
-  const apiKey = textInput(settings.apiKey, { placeholder: "sk-...", type: "password" });
-  apiKey.addEventListener("change", () => update({ apiKey: apiKey.value }));
+  // --- Provider ------------------------------------------------------------
+  const provider = selectInput(PROVIDERS.map((p) => p.id), settings.provider);
+  controls.provider = provider;
+  let activeProvider = getProvider(provider.value);
+
+  // --- API key (per provider) ------------------------------------------------
+  const apiKey = textInput(settings.providerKeys[activeProvider.id] ?? "", {
+    placeholder: activeProvider.keyPlaceholder,
+    type: "password",
+  });
+  apiKey.disabled = !activeProvider.needsKey;
+  apiKey.addEventListener("change", () => {
+    const id = provider.value;
+    const current = deps.store.get().providerKeys;
+    update({ providerKeys: { ...current, [id]: apiKey.value.trim() } });
+  });
   controls.apiKey = apiKey;
 
   const showKey = checkbox(false, "Show");
@@ -111,10 +127,44 @@ function buildSettingsForm(deps: SettingsPanelDeps): HTMLElement {
     apiKey.type = showKey.checked ? "text" : "password";
   });
 
-  // --- Model (the only AI parameter) ---------------------------------------
-  const model = selectInput(DEEPSEEK_MODELS, settings.model);
-  model.addEventListener("change", () => update({ model: model.value as Settings["model"] }));
+  // --- Model (suggestions per provider, free text allowed) --------------------
+  const model = textInput(settings.model, { placeholder: "Modelo (ej. deepseek-v4-flash)" });
+  model.addEventListener("change", () => update({ model: model.value.trim() }));
   controls.model = model;
+  const modelDatalist = document.createElement("datalist");
+  modelDatalist.id = "ailt-model-list";
+  model.setAttribute("list", modelDatalist.id);
+
+  // --- Custom base URL (only for the "custom" provider) ----------------------
+  const baseUrl = textInput(settings.customBaseUrl, {
+    placeholder: "http://localhost:11434/v1",
+  });
+  baseUrl.addEventListener("change", () => update({ customBaseUrl: baseUrl.value.trim() }));
+  controls.baseUrl = baseUrl;
+  const baseUrlRow = fieldRow("Base URL (custom)", baseUrl);
+
+  // --- Provider switch side effects ------------------------------------------
+  const refreshForProvider = (): void => {
+    const p = getProvider(provider.value);
+    activeProvider = p;
+    const keys = deps.store.get().providerKeys;
+    apiKey.value = keys[p.id] ?? "";
+    apiKey.placeholder = p.keyPlaceholder;
+    apiKey.disabled = !p.needsKey;
+    model.disabled = p.kind !== "llm";
+    if (!p.models.includes(model.value)) {
+      model.value = p.defaultModel;
+    }
+    refreshModelList(modelDatalist, p);
+    baseUrlRow.style.display = p.id === "custom" ? "flex" : "none";
+    modelRow.style.display = p.kind === "llm" ? "flex" : "none";
+  };
+  provider.addEventListener("change", refreshForProvider);
+  refreshModelList(modelDatalist, activeProvider);
+
+  const modelRow = fieldRow("Modelo", row(model, modelDatalist));
+  modelRow.style.display = activeProvider.kind === "llm" ? "flex" : "none";
+  baseUrlRow.style.display = activeProvider.id === "custom" ? "flex" : "none";
 
   // --- Target language (dropdown, no manual ISO codes) ----------------------
   const language = languageSelect(settings.targetLanguage);
@@ -133,7 +183,11 @@ function buildSettingsForm(deps: SettingsPanelDeps): HTMLElement {
     update({ displayMode: mode });
     syncSegmented(segmented, mode);
   });
-  controls.displayMode = segmentedButtons(segmented);
+  // The hidden select mirrors the control; it MUST start on the actual
+  // display mode — a select defaults to its FIRST option ("original"), so an
+  // uninitialized mirror silently saved "original" on every Save click.
+  controls.displayMode = segmentedButtons(segmented, settings.displayMode);
+  syncSegmented(segmented, settings.displayMode);
 
   // --- Typography -----------------------------------------------------------
   const fontFamily = textInput(settings.fontFamily, { placeholder: "Heredar" });
@@ -159,9 +213,19 @@ function buildSettingsForm(deps: SettingsPanelDeps): HTMLElement {
   controls.opacity = opacity;
 
   // --- Actions --------------------------------------------------------------
+  const saveButton = button("Guardar", () => {
+    // Explicit save: read every control's current value straight from the
+    // DOM and persist it. The store auto-saves on each change anyway — this
+    // is the "just in case" confirmation (e.g. text typed but not blurred).
+    const current = deps.store.get();
+    deps.store.update(collectFormValues(controls, current));
+    Spicetify.showNotification("Ajustes guardados.");
+  }, false, true);
+
   const resetButton = button("Restablecer", () => {
     deps.store.reset();
     syncControls(controls, deps.store.get());
+    refreshForProvider();
     Spicetify.showNotification("Ajustes restablecidos.");
   });
 
@@ -174,9 +238,11 @@ function buildSettingsForm(deps: SettingsPanelDeps): HTMLElement {
   // --- Assemble -------------------------------------------------------------
   form.append(
     section(
-      "Cuenta y traducción",
+      "Proveedor y traducción",
+      fieldRow("Proveedor", provider),
       fieldRow("API Key", row(apiKey, showKey)),
-      fieldRow("Modelo", model),
+      modelRow,
+      baseUrlRow,
       fieldRow("Idioma destino", language),
       fieldRow("Auto-traducir", autoTranslate),
     ),
@@ -190,12 +256,40 @@ function buildSettingsForm(deps: SettingsPanelDeps): HTMLElement {
       fieldRow("Opacidad", opacity),
     ),
     hint(
-      "La traducción usa DeepSeek con los parámetros recomendados (temperatura 1.3, sin modo pensante). El modelo es lo único que necesitas elegir.",
+      "Tu clave se guarda solo en este equipo y se envía únicamente al proveedor elegido. Los parámetros de la IA (temperatura, modo pensante) usan los valores recomendados.",
     ),
-    row(resetButton, clearCacheButton),
+    row(saveButton, resetButton, clearCacheButton),
   );
 
   return form;
+}
+
+/**
+ * Reads every control's current value straight from the DOM and returns it as
+ * a settings patch. Used by the explicit Save button so nothing typed but not
+ * yet blurred is lost.
+ */
+function collectFormValues(
+  controls: Record<string, Control>,
+  current: Settings,
+): Partial<Settings> {
+  return {
+    provider: controls.provider.value,
+    providerKeys: {
+      ...current.providerKeys,
+      [controls.provider.value]: controls.apiKey.value.trim(),
+    },
+    customBaseUrl: controls.baseUrl.value.trim(),
+    model: controls.model.value.trim(),
+    targetLanguage: controls.language.value,
+    autoTranslate: (controls.autoTranslate as HTMLInputElement).checked,
+    displayMode: controls.displayMode.value as DisplayMode,
+    fontFamily: controls.fontFamily.value,
+    fontSize: Number(controls.fontSize.value),
+    color: controls.color.value,
+    lineSpacing: Number(controls.lineSpacing.value),
+    opacity: Number(controls.opacity.value),
+  };
 }
 
 function section(title: string, ...children: HTMLElement[]): HTMLElement {
@@ -227,11 +321,16 @@ function button(
   text: string,
   onClick: () => void,
   danger = false,
+  primary = false,
 ): HTMLButtonElement {
-  const el = createElement("button", {
-    className: `ailt-btn${danger ? " is-danger" : ""}`,
-    text,
-  });
+  const className = [
+    "ailt-btn",
+    danger ? "is-danger" : "",
+    primary ? "is-primary" : "",
+  ]
+    .filter(Boolean)
+    .join(" ");
+  const el = createElement("button", { className, text });
   el.addEventListener("click", onClick);
   return el;
 }
@@ -240,6 +339,12 @@ function button(
  * Segmented control for the display mode. Returns the container; the active
  * segment is tracked via `.is-active`. A hidden select keeps `syncControls`
  * working after a reset.
+ *
+ * The active state is matched by the `data-mode` attribute, NEVER by the
+ * visible label text: the label is user-facing Spanish ("Solo original")
+ * while the mode value is the machine id ("original") — comparing text to
+ * value would never match and the control would show no selection at all
+ * (the exact bug that hid the display mode from the user).
  */
 function segmentedControl(
   value: DisplayMode,
@@ -247,15 +352,15 @@ function segmentedControl(
 ): HTMLElement {
   const container = createElement("div", { className: "ailt-segmented" });
   const labels: Record<DisplayMode, string> = {
-    original: "Original",
-    translation: "Traducción",
+    original: "Solo original",
+    translation: "Solo traducción",
     both: "Ambas",
   };
   for (const mode of DISPLAY_MODES) {
     const btn = createElement("button", {
       className: `ailt-seg-btn${mode === value ? " is-active" : ""}`,
       text: labels[mode],
-      attrs: { type: "button" },
+      attrs: { type: "button", "data-mode": mode },
     });
     btn.addEventListener("click", () => onChange(mode));
     container.append(btn);
@@ -263,8 +368,13 @@ function segmentedControl(
   return container;
 }
 
-/** The hidden select mirroring the segmented control (used after reset). */
-function segmentedButtons(container: HTMLElement): HTMLSelectElement {
+/**
+ * The hidden select mirroring the segmented control (used by Save/reset).
+ * Its initial value must be the CURRENT display mode — a fresh select
+ * defaults to its first option ("original"), which used to silently reset
+ * the display mode to "original" whenever the user clicked Save.
+ */
+function segmentedButtons(container: HTMLElement, value: DisplayMode): HTMLSelectElement {
   const select = createElement("select", { className: "ailt-seg-hidden" });
   select.style.display = "none";
   for (const mode of DISPLAY_MODES) {
@@ -272,13 +382,14 @@ function segmentedButtons(container: HTMLElement): HTMLSelectElement {
     option.value = mode;
     select.append(option);
   }
+  select.value = value;
   container.append(select);
   return select;
 }
 
 function syncSegmented(container: HTMLElement, mode: DisplayMode): void {
   for (const btn of Array.from(container.querySelectorAll<HTMLButtonElement>(".ailt-seg-btn"))) {
-    btn.classList.toggle("is-active", btn.textContent === mode);
+    btn.classList.toggle("is-active", btn.dataset.mode === mode);
   }
   const select = container.querySelector<HTMLSelectElement>(".ailt-seg-hidden");
   if (select) {
@@ -286,10 +397,22 @@ function syncSegmented(container: HTMLElement, mode: DisplayMode): void {
   }
 }
 
+/** Fills the model datalist with the provider's suggested models. */
+function refreshModelList(datalist: HTMLDataListElement, provider: TranslationProvider): void {
+  datalist.replaceChildren();
+  for (const model of provider.models) {
+    const option = document.createElement("option");
+    option.value = model;
+    datalist.append(option);
+  }
+}
+
 /** Re-applies store values to every control (used after reset). */
 function syncControls(controls: Record<string, Control>, settings: Settings): void {
-  controls.apiKey.value = settings.apiKey;
+  controls.provider.value = settings.provider;
+  controls.apiKey.value = settings.providerKeys[settings.provider] ?? "";
   controls.model.value = settings.model;
+  controls.baseUrl.value = settings.customBaseUrl;
   controls.language.value = settings.targetLanguage;
   setCheckbox(controls.autoTranslate, settings.autoTranslate);
   controls.displayMode.value = settings.displayMode;

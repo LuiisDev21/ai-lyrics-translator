@@ -1,0 +1,13 @@
+[
+  {
+    "name": "AI Lyrics Translator",
+    "description": "Translate Spotify lyrics in place — each line translated under its original. Bring your own API key: DeepSeek, OpenRouter, Google Gemini, Groq or any custom endpoint.",
+    "preview": "screenshot.png",
+    "main": "dist/ai-lyrics-translator.js",
+    "readme": "README.md",
+    "authors": [
+      { "name": "LuiisDev21", "url": "https://github.com/LuiisDev21" }
+    ],
+    "tags": ["lyrics", "translation", "ai"]
+  }
+]

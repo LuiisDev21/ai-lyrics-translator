@@ -77,7 +77,12 @@ export class Renderer {
    * Called after every container mutation (React re-creates line elements),
    * after `setContent`, on panel open and on settings changes.
    */
-  resync(container: Element): void {
+  /**
+   * Re-attaches translations to the current lyric lines in the container.
+   * Returns the number of translations present after the sync (0 when the
+   * display mode is "original" or no line matched).
+   */
+  resync(container: Element): number {
     this.container = container;
 
     // "Original" mode: no translations at all — drop any previous ones.
@@ -85,7 +90,7 @@ export class Renderer {
       this.removeOwned(container);
       this.translationElements = [];
       this.activeIndex = null;
-      return;
+      return 0;
     }
 
     const owned = new Set<HTMLElement>();
@@ -110,10 +115,10 @@ export class Renderer {
 
     // Drop translations whose line no longer exists or no longer matches.
     this.removeStale(container, owned);
-
     this.translationElements = Array.from(owned);
     this.activeIndex = null;
     this.applyActiveState();
+    return this.translationElements.length;
   }
 
   /**

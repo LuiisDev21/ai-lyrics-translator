@@ -32,7 +32,12 @@
 import { extractLyrics } from "../lyrics/LyricsExtractor";
 import { buildPrompt, type BuiltPrompt } from "./PromptBuilder";
 import { parseTranslationResponse } from "./JsonParser";
-import { complete, DeepSeekError, type RequestOptions } from "./DeepSeekProvider";
+import { getProvider } from "../providers/registry";
+import {
+  ProviderError,
+  type RequestOptions,
+  type TranslationProvider,
+} from "../providers/types";
 import type { TranslationCache } from "../cache/MemoryCache";
 import { logger } from "../utils/Logger";
 import type { CurrentTrack } from "../player/SongListener";
@@ -57,7 +62,10 @@ export interface TranslatorDeps {
   persistentCache: TranslationCache;
   /** Returns the current validated settings on every call. */
   getSettings: () => Settings;
-  /** Injectable request function (defaults to the DeepSeek provider). */
+  /**
+   * Injectable LLM request function (tests). Defaults to the active
+   * provider's `complete`.
+   */
   completeRequest?: (
     prompt: BuiltPrompt,
     settings: Settings,
@@ -118,13 +126,36 @@ export class Translator {
     }
 
     const settings = this.deps.getSettings();
-    if (!settings.apiKey) {
-      this.emitStatus("error", "Falta la API key de DeepSeek. Configúrala en los ajustes.");
+    const provider = getProvider(settings.provider);
+    const apiKey = settings.providerKeys[provider.id];
+    logger.info(
+      `Provider: ${provider.label} (id=${provider.id}), key: ${apiKey ? "present" : "MISSING"}, displayMode: ${settings.displayMode}`,
+    );
+    if (provider.needsKey && !apiKey) {
+      this.emitStatus(
+        "error",
+        `Falta la API key de ${provider.label}. Configúrala en los ajustes.`,
+      );
       return;
     }
 
     this.emitStatus("translating");
-    logger.info(`Translating ${track.name} (${extraction.lines.length} lines).`);
+    logger.info(
+      `Translating ${track.name} (${extraction.lines.length} lines) via ${provider.label}.`,
+    );
+
+    // Direct providers (DeepL) translate the lines in one REST call — no
+    // prompt, no JSON parsing.
+    if (provider.kind === "direct") {
+      await this.runDirect(
+        provider,
+        track,
+        extraction.lines,
+        settings,
+        controller,
+      );
+      return;
+    }
 
     const prompt = buildPrompt(extraction.lines, {
       targetLanguage: settings.targetLanguage,
@@ -172,7 +203,9 @@ export class Translator {
         const translations = parsed.entries.map((entry) => entry.translated);
         this.deps.memoryCache.set(track.id, translations);
         this.deps.persistentCache.set(track.id, translations);
-        logger.info(`Translation ready for ${track.id}.`);
+        logger.info(
+          `Translation ready for ${track.id}: ${translations.length}/${extraction.lines.length} lines.`,
+        );
 
         this.emitTranslated(track, extraction.lines, translations);
         this.emitStatus("ready");
@@ -183,9 +216,44 @@ export class Translator {
           return;
         }
         logger.error("Translation failed.", error);
-        this.emitStatus("error", friendlyMessage(error));
+        this.emitStatus("error", friendlyMessage(error, provider));
         return;
       }
+    }
+  }
+
+  private async runDirect(
+    provider: TranslationProvider,
+    track: CurrentTrack,
+    lines: string[],
+    settings: Settings,
+    controller: AbortController,
+  ): Promise<void> {
+    try {
+      const translations = await provider.translateLines?.(
+        lines,
+        settings.targetLanguage,
+        settings,
+        { signal: controller.signal },
+      );
+      if (!translations) {
+        throw new ProviderError("api", `${provider.label} no implementa translateLines.`);
+      }
+      // Providers may return a different count (e.g. DeepL drops empty lines):
+      // align to the extracted lines, padding or truncating defensively.
+      const aligned = lines.map((_, i) => translations[i] ?? "");
+      this.deps.memoryCache.set(track.id, aligned);
+      this.deps.persistentCache.set(track.id, aligned);
+      logger.info(`Translation ready for ${track.id} via ${provider.label}.`);
+      this.emitTranslated(track, lines, aligned);
+      this.emitStatus("ready");
+    } catch (error) {
+      if (this.isCancellation(error, controller)) {
+        logger.debug("Translation cancelled.");
+        return;
+      }
+      logger.error("Translation failed.", error);
+      this.emitStatus("error", friendlyMessage(error, provider));
     }
   }
 
@@ -197,7 +265,11 @@ export class Translator {
     if (this.deps.completeRequest) {
       return this.deps.completeRequest(prompt, settings, { signal });
     }
-    return complete(prompt, settings, { signal });
+    const provider = getProvider(settings.provider);
+    if (!provider.complete) {
+      throw new ProviderError("api", `${provider.label} no implementa complete.`);
+    }
+    return provider.complete(prompt, settings, { signal });
   }
 
   /** True when the failure is a user/song-change cancellation (stay silent). */
@@ -205,7 +277,7 @@ export class Translator {
     if (error instanceof DOMException && error.name === "AbortError") {
       return true;
     }
-    if (error instanceof DeepSeekError && error.kind === "network") {
+    if (error instanceof ProviderError && error.kind === "network") {
       // A fetch aborted mid-flight can surface as a network error on some
       // Chromium versions; a cancelled controller is authoritative.
       return controller.signal.aborted;
@@ -235,21 +307,21 @@ export class Translator {
 }
 
 /** Maps typed provider errors (and unknown errors) to user-facing messages. */
-function friendlyMessage(error: unknown): string {
-  if (error instanceof DeepSeekError) {
+function friendlyMessage(error: unknown, provider: TranslationProvider): string {
+  if (error instanceof ProviderError) {
     switch (error.kind) {
       case "unauthorized":
-        return "API key de DeepSeek inválida. Revísala en los ajustes.";
+        return `API key de ${provider.label} inválida. Revísala en los ajustes.`;
       case "rate-limit":
-        return "Límite de peticiones de DeepSeek alcanzado. Espera unos segundos e inténtalo de nuevo.";
+        return `Límite de peticiones de ${provider.label} alcanzado. Espera unos segundos e inténtalo de nuevo.`;
       case "timeout":
-        return "La traducción tardó demasiado. Aumenta el timeout en los ajustes.";
+        return "La traducción tardó demasiado. Inténtalo de nuevo.";
       case "network":
         return "Error de red. Comprueba tu conexión e inténtalo de nuevo.";
       case "empty-response":
-        return "DeepSeek devolvió una respuesta vacía. Usa «Refrescar» para reintentar.";
+        return `${provider.label} devolvió una respuesta vacía. Inténtalo de nuevo.`;
       case "api":
-        return `Error de DeepSeek${error.status !== undefined ? ` (${error.status})` : ""}. Inténtalo de nuevo.`;
+        return `Error de ${provider.label}${error.status !== undefined ? ` (${error.status})` : ""}. Inténtalo de nuevo.`;
     }
   }
   return "Error inesperado al traducir.";

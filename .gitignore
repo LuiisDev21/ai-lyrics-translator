@@ -2,8 +2,7 @@
 node_modules/
 
 # Build output (spicetify-creator writes to the Spicetify Extensions dir by default;
-# `npm run build-local` writes to ./dist)
-dist/
+# `npm run build-local` writes to ./dist — committed so the Marketplace can serve it)
 test-build.cjs
 
 # Editor / OS

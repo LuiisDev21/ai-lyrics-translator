@@ -30,6 +30,11 @@ const FALLBACK_BOTTOM = "32px";
 const FALLBACK_RIGHT = "32px";
 /** Gap between the label and the lyrics panel edge, in px. */
 const EDGE_GAP_PX = 12;
+/**
+ * Height of the player bar zone. The lyrics container's rect extends BEHIND
+ * the player bar; the visible bottom of the lyrics window ends here.
+ */
+const PLAYER_BAR_ALLOWANCE_PX = 96;
 
 export class Overlay {
   private readonly root: HTMLElement;
@@ -91,15 +96,17 @@ export class Overlay {
   };
 
   /**
-   * Places the label at the BOTTOM-right of the lyrics window — STATIC. The
-   * bottom is pinned to the viewport (the lyrics window's bottom edge is
-   * stable; only the lyrics CONTENT moves inside it) and the right edge uses
-   * the container's rect computed at mount/resize.
+   * Places the label at the BOTTOM-right of the lyrics window — STATIC.
+   * The lyrics panel's VISIBLE bottom ends just above the player bar (~96px
+   * tall); the container's rect extends behind it, so pinning the label to
+   * `rect.bottom` or the viewport bottom would hide it under the player bar.
+   * Computed at mount/resize only, never on scroll or karaoke movement.
    */
   private position(): void {
     if (this.anchor) {
       const rect = this.anchor.getBoundingClientRect();
-      this.root.style.bottom = `${Math.max(window.innerHeight - 16, 8)}px`;
+      const visibleBottom = Math.min(rect.bottom, window.innerHeight - PLAYER_BAR_ALLOWANCE_PX);
+      this.root.style.bottom = `${Math.max(window.innerHeight - visibleBottom + EDGE_GAP_PX, 8)}px`;
       this.root.style.right = `${Math.max(window.innerWidth - rect.right + EDGE_GAP_PX, 8)}px`;
       this.root.style.top = "auto";
     } else {

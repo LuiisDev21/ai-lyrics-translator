@@ -10,7 +10,7 @@ import { PersistentCache } from "../src/cache/PersistentCache";
 import { normalizeSettings, type Settings } from "../src/settings/Settings";
 import type { CurrentTrack } from "../src/player/SongListener";
 import type { BuiltPrompt } from "../src/translation/PromptBuilder";
-import type { RequestOptions } from "../src/translation/DeepSeekProvider";
+import type { RequestOptions } from "../src/providers/types";
 
 class FakeStorage implements Storage {
   private readonly map = new Map<string, string>();

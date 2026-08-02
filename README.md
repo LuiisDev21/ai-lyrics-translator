@@ -1,77 +1,87 @@
 # AI Lyrics Translator
 
 Spicetify extension that translates the lyrics shown by Spotify **in place** —
-each translated line is rendered underneath its original — using exclusively
-the official [DeepSeek API](https://api.deepseek.com). Built with
-TypeScript + [Spicetify Creator](https://spicetify.app/docs/development/spicetify-creator/).
+each translated line is rendered underneath its original, following the
+karaoke dance. **Bring your own API key** (BYOK): the key never leaves your
+machine and is sent only to the provider you choose.
 
-## Requirements
+Built with TypeScript + [Spicetify Creator](https://spicetify.app/docs/development/spicetify-creator/).
 
-- Node.js 18+
-- Spicetify CLI ([install guide](https://spicetify.app/docs/getting-started/))
+## Screenshots
+
+*(Añade aquí una captura de Spotify con las letras traducidas — `screenshot.png` en la raíz del repo.)*
+
+## Features
+
+- **Multi-provider**: DeepSeek (default), OpenRouter, Google Gemini, Groq and
+  any custom OpenAI-compatible endpoint (Ollama, LM Studio, llama.cpp…).
+  All providers verified to work from the Spotify origin (CORS).
+- **Discreet UI**: a small "Translating…" label while working; nothing stays
+  on screen once done. Settings live in the **profile menu** (avatar →
+  *AI Lyrics Translator*).
+- **Content-based tracking**: translations stay glued to their lines even as
+  Spotify's React re-renders and virtualizes the lyrics rows.
+- **One request per song** (JSON mode), **two-level cache** (memory +
+  localStorage) — a song is translated once, ever.
+- **Typed errors** in Spanish with friendly messages (invalid key, rate
+  limit, timeout, network…).
+- **25 target languages** via a dropdown (no manual ISO codes).
+
+## Installation
+
+### Via Spicetify Marketplace (recommended)
+
+1. Install [Spicetify](https://spicetify.app/docs/getting-started/) and
+   [Marketplace](https://github.com/spicetify/marketplace).
+2. In Marketplace → Extensions → search **AI Lyrics Translator** → Install.
+3. `spicetify apply` (or restart Spotify).
+
+### Manual
+
+```bash
+spicetify config extensions ai-lyrics-translator.js
+spicetify apply
+```
+
+## Configuration
+
+1. Click your **profile picture** → **AI Lyrics Translator**.
+2. Choose a provider (DeepSeek, OpenRouter, Gemini, Groq or custom endpoint).
+3. Paste that provider's API key (each provider keeps its own).
+4. Pick the target language and display mode, then **Guardar**.
+5. Open the lyrics of any song — translations render under each line.
+
+Free options: Gemini (Google free tier), Groq (free tier), OpenRouter
+(free models), DeepSeek. The API key is stored only in your
+`localStorage` and sent only to the selected provider.
 
 ## Development
 
 ```bash
 npm install
-npm run build        # builds to the Spicetify Extensions folder
-npm run build-local  # builds to ./dist (for inspection/repo)
-npm run watch        # rebuilds on every change
+npm test          # 183 assertions, node + jsdom
+npm run build-local   # builds ./dist/ai-lyrics-translator.js
 ```
 
-To enable the extension:
+Manual install of a local build:
 
 ```bash
 spicetify config extensions ai-lyrics-translator.js
 spicetify apply
 ```
-
-Hot-reload development: run `npm run watch` in one terminal and
-`spicetify watch -le` in another.
 
 ## Architecture
 
-See the module headers under `src/`. Key design decisions:
+See the module headers under `src/`. Key decisions:
 
 - **DOM extraction, not private APIs**: `Spicetify.Player.getLyrics` does not
-  exist in the public API, so lyrics are read from the rendered lyrics panel
-  via stable `data-testid` selectors, centralized in `src/lyrics/LyricsSelectors.ts`.
-- **Direct `fetch` to DeepSeek**: the API sends CORS headers allowing the
-  Spotify origin (verified), so no proxy is used and the API key never passes
-  through a third party.
-- **One request per song**: the whole song is translated in a single chat
-  completion (JSON mode), never per line.
-- **Two-level cache**: in-memory `Map` + `localStorage`, so a song is only
-  translated once.
-
-## Status
-
-Implemented and compiling. To use it:
-
-```bash
-npm install
-npm run build        # writes dist to the Spicetify Extensions folder
-spicetify config extensions ai-lyrics-translator.js
-spicetify apply
-```
-
-Then open Settings → AI Lyrics Translator (top-bar icon) and add your
-DeepSeek API key. Open the lyrics view of any song — translations render
-under each line. The top-right overlay offers **Translate** (cache-first)
-and **Refresh Translation** (bypasses the cache).
-
-### Verified behaviors (automated test suite — `npm test`)
-
-166 assertions across 5 suites (node + jsdom, esbuild-bundled runner):
-
-- **JsonParser**: fences, prose, trailing commas, truncation, escaping
-- **DeepSeek request body**: thinking/reasoning/JSON-mode contract
-- **Settings normalization**: clamping, enum validation, corrupted input
-- **Retry / DOM helpers / track-id extraction / PromptBuilder**
-- **Caches + ConfigStore**: eviction, corruption-as-miss, reset, pub/sub
-- **DOM layer (jsdom)**: selectors, extractor, observer open/close/content/active
-  cycles, renderer alignment + active mirror, overlay states
-- **Translator**: cache hits, parse retry, count mismatch, cancellation,
-  refresh, error paths
-- **DeepSeekProvider**: HTTP semantics with stubbed fetch — 401/429 retry/
-  timeout/external abort/empty content
+  exist in the public API; lyrics are read from the rendered panel via
+  selectors centralized in `src/lyrics/LyricsSelectors.ts`.
+- **Direct fetch to each provider** (CORS verified for all of them): no
+  proxy, the key never passes through a third party.
+- **Provider registry** (`src/providers/`): one generic OpenAI-compatible
+  engine parameterized by base URL + model list covers DeepSeek/OpenRouter/
+  Gemini/Groq/custom; adding a provider = one config object.
+- **Renderer v6**: translations are inserted INTO Spotify's lyrics flow,
+  matched by content, re-attached on every DOM mutation — no fixed overlay
+  layer, no correction loops.

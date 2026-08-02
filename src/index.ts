@@ -98,7 +98,18 @@ function bootstrap(): void {
       // Content-based tracking: store the map, then attach to the current DOM.
       renderer.setContent(lines, translations);
       if (openContainer) {
-        renderer.resync(openContainer);
+        const attached = renderer.resync(openContainer);
+        logger.info(
+          `Renderer attached ${attached}/${translations.length} translations.`,
+        );
+        if (attached === 0 && translations.length > 0) {
+          // The translation completed but nothing rendered: the display mode
+          // ("Mostrar") hides them. Tell the user instead of failing silently.
+          overlay.setStatus(
+            "error",
+            "Traducción lista pero oculta: revisa «Mostrar» en los ajustes.",
+          );
+        }
       }
     },
   });

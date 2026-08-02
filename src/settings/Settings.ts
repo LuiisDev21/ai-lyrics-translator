@@ -31,14 +31,9 @@
  * false?), so this is modeled as one `DisplayMode` union instead. The settings
  * panel renders it as three exclusive options.
  */
-export type DeepSeekModel = "deepseek-v4-flash" | "deepseek-v4-pro";
-export type DisplayMode = "original" | "translation" | "both";
+import { PROVIDER_IDS } from "../providers/types";
 
-/** Models officially documented by DeepSeek (api-docs.deepseek.com). */
-export const DEEPSEEK_MODELS: readonly DeepSeekModel[] = [
-  "deepseek-v4-flash",
-  "deepseek-v4-pro",
-];
+export type DisplayMode = "original" | "translation" | "both";
 
 export const DISPLAY_MODES: readonly DisplayMode[] = [
   "original",
@@ -80,16 +75,30 @@ export const TARGET_LANGUAGES: readonly { code: string; name: string }[] = [
 ];
 
 export interface Settings {
-  /** DeepSeek API key (sk-...). Stored locally, sent only to api.deepseek.com. */
-  apiKey: string;
   /**
-   * Model id. Default `deepseek-v4-flash` (fast, cheap, current). This is the
-   * only AI parameter exposed to the user — temperature, thinking mode and
-   * reasoning effort are intentionally not configurable: sensible constants
-   * live in `DeepSeekProvider` (temperature 1.3, thinking disabled), which is
-   * what the official DeepSeek docs recommend for translation.
+   * Active provider id (see `PROVIDER_IDS` in providers/types). Default
+   * "deepseek".
    */
-  model: DeepSeekModel;
+  provider: string;
+  /**
+   * API keys per provider id — each provider keeps its own key, so switching
+   * providers does not overwrite anything. Stored locally; sent only to the
+   * selected provider's endpoint.
+   */
+  providerKeys: Record<string, string>;
+  /**
+   * Base URL for the "custom" provider (any OpenAI-compatible endpoint:
+   * Ollama, LM Studio, llama.cpp, OpenWebUI…).
+   */
+  customBaseUrl: string;
+  /**
+   * Model id (free string — each provider suggests its own models in the
+   * panel). Default `deepseek-v4-flash` (fast, cheap, current). This is the
+   * only AI parameter exposed to the user — temperature, thinking mode and
+   * reasoning effort are constants in the provider layer (temperature 1.3,
+   * thinking disabled), per the official DeepSeek docs.
+   */
+  model: string;
   /** Target language for translations (ISO 639-1 code, e.g. "es"). */
   targetLanguage: string;
   /** Translate automatically on song change (vs. only via the manual button). */
@@ -114,7 +123,9 @@ export const LINE_SPACING_RANGE: readonly [number, number] = [0, 32];
 export const OPACITY_RANGE: readonly [number, number] = [0.1, 1];
 
 export const DEFAULT_SETTINGS: Settings = {
-  apiKey: "",
+  provider: "deepseek",
+  providerKeys: {},
+  customBaseUrl: "",
   model: "deepseek-v4-flash",
   targetLanguage: "es",
   autoTranslate: true,
@@ -144,17 +155,43 @@ export function normalizeSettings(raw: unknown): Settings {
   const source: Record<string, unknown> =
     raw !== null && typeof raw === "object" ? (raw as Record<string, unknown>) : {};
 
-  const settings: Settings = { ...DEFAULT_SETTINGS };
-
-  if (typeof source.apiKey === "string") {
-    settings.apiKey = source.apiKey.trim();
-  }
+  // Fresh providerKeys object — DEFAULT_SETTINGS must never be mutated by
+  // normalization (it is shared by every call).
+  const settings: Settings = { ...DEFAULT_SETTINGS, providerKeys: {} };
 
   if (
-    typeof source.model === "string" &&
-    (DEEPSEEK_MODELS as readonly string[]).includes(source.model)
+    typeof source.provider === "string" &&
+    (PROVIDER_IDS as readonly string[]).includes(source.provider)
   ) {
-    settings.model = source.model as DeepSeekModel;
+    settings.provider = source.provider;
+  }
+
+  // Provider keys: only string values are kept; old flat `apiKey` values are
+  // migrated into the DeepSeek key slot.
+  if (source.providerKeys !== null && typeof source.providerKeys === "object") {
+    for (const [key, value] of Object.entries(source.providerKeys as Record<string, unknown>)) {
+      if (typeof value === "string" && value.trim().length > 0) {
+        settings.providerKeys[key] = value.trim();
+      }
+    }
+  }
+  if (
+    typeof source.apiKey === "string" &&
+    source.apiKey.trim().length > 0 &&
+    settings.providerKeys.deepseek === undefined
+  ) {
+    settings.providerKeys.deepseek = source.apiKey.trim();
+  }
+
+  if (typeof source.customBaseUrl === "string") {
+    settings.customBaseUrl = source.customBaseUrl.trim();
+  }
+
+  if (typeof source.model === "string") {
+    const model = source.model.trim();
+    if (model.length > 0) {
+      settings.model = model;
+    }
   }
 
   if (typeof source.targetLanguage === "string") {

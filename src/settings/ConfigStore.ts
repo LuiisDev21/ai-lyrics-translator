@@ -61,9 +61,17 @@ export class ConfigStore {
     this.notify();
   }
 
-  /** Restores every setting to its documented default and persists. */
+  /**
+   * Restores every setting to its documented default and persists. API keys
+   * and the custom base URL are CREDENTIALS — resetting the UI must not wipe
+   * them (re-entering keys is painful and a silent wipe looks like a bug).
+   */
   reset(): void {
+    const keys = this.settings.providerKeys;
+    const baseUrl = this.settings.customBaseUrl;
     this.settings = normalizeSettings(null);
+    this.settings.providerKeys = { ...keys };
+    this.settings.customBaseUrl = baseUrl;
     this.persist();
     this.notify();
   }

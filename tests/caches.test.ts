@@ -60,9 +60,9 @@ export async function run(): Promise<void> {
 
   const seen: Array<Record<string, unknown>> = [];
   const unsubscribe = store.onChange((settings) => seen.push({ ...settings }));
-  store.update({ apiKey: "sk-abc", fontSize: 20 });
-  check("update-applies", store.get().apiKey, "sk-abc");
-  check("update-persists", JSON.parse(storage.getItem(SETTINGS_STORAGE_KEY) ?? "{}").apiKey, "sk-abc");
+  store.update({ providerKeys: { deepseek: "sk-abc" }, fontSize: 20 });
+  check("update-applies", store.get().providerKeys.deepseek, "sk-abc");
+  check("update-persists", JSON.parse(storage.getItem(SETTINGS_STORAGE_KEY) ?? "{}").providerKeys.deepseek, "sk-abc");
   check("listener-fired", seen.length, 1);
   unsubscribe();
   store.update({ targetLanguage: "en" });
@@ -74,10 +74,20 @@ export async function run(): Promise<void> {
 
   const resetStorage = new FakeStorage();
   const resettable = new ConfigStore(resetStorage);
-  resettable.update({ apiKey: "sk-x", model: "deepseek-v4-pro" });
+  resettable.update({ providerKeys: { deepseek: "sk-x" }, model: "deepseek-v4-pro" });
   resettable.reset();
-  check("reset-restores-defaults", resettable.get(), DEFAULT_SETTINGS);
-  check("reset-persists", resetStorage.getItem(SETTINGS_STORAGE_KEY), JSON.stringify(DEFAULT_SETTINGS));
+  const afterReset = resettable.get();
+  check(
+    "reset-restores-defaults",
+    { ...afterReset, providerKeys: {} },
+    { ...DEFAULT_SETTINGS, providerKeys: {} },
+  );
+  check("reset-keeps-keys", afterReset.providerKeys.deepseek, "sk-x");
+  check(
+    "reset-persists",
+    JSON.parse(resetStorage.getItem(SETTINGS_STORAGE_KEY) ?? "{}").providerKeys.deepseek,
+    "sk-x",
+  );
 
   // Normalization round-trip: out-of-range value is clamped on update.
   const clamped = new ConfigStore(new FakeStorage());

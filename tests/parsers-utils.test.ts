@@ -4,11 +4,22 @@
  */
 import { check, checkRejects, section } from "./helpers";
 import { parseTranslationResponse } from "../src/translation/JsonParser";
-import { buildRequestBody } from "../src/translation/DeepSeekProvider";
-import { normalizeSettings, DISPLAY_MODES, DEEPSEEK_MODELS, TARGET_LANGUAGES } from "../src/settings/Settings";
+import { buildRequestBody, type LLMProviderConfig } from "../src/providers/llm";
+import { normalizeSettings, DISPLAY_MODES, TARGET_LANGUAGES } from "../src/settings/Settings";
 import { extractTrackId } from "../src/player/SongListener";
 import { buildPrompt } from "../src/translation/PromptBuilder";
 import { retryWithBackoff, delay } from "../src/utils/Retry";
+
+const DS_CONFIG: LLMProviderConfig = {
+  id: "deepseek",
+  label: "DeepSeek",
+  baseUrl: "https://api.deepseek.com",
+  models: ["deepseek-v4-flash", "deepseek-v4-pro"],
+  defaultModel: "deepseek-v4-flash",
+  keyPlaceholder: "sk-",
+  jsonMode: "response_format",
+  sendsThinking: true,
+};
 import { createElement, insertAfter, removeChildren, queryAll, queryFirst, setAttributes } from "../src/utils/Dom";
 
 export async function run(): Promise<void> {
@@ -66,8 +77,8 @@ export async function run(): Promise<void> {
 
   // --- buildRequestBody ------------------------------------------------------
   section("DeepSeek request body");
-  const base = normalizeSettings({ apiKey: "sk-test" });
-  check("defaults", buildRequestBody({ system: "sys", user: "user" }, base, false), {
+  const base = normalizeSettings({ providerKeys: { deepseek: "sk-test" } });
+  check("defaults", buildRequestBody({ system: "sys", user: "user" }, base, DS_CONFIG, false), {
     model: "deepseek-v4-flash",
     messages: [
       { role: "system", content: "sys" },
@@ -78,8 +89,8 @@ export async function run(): Promise<void> {
     response_format: { type: "json_object" },
     thinking: { type: "disabled" },
   });
-  const custom = normalizeSettings({ apiKey: "sk-test", model: "deepseek-v4-pro" });
-  const body = buildRequestBody({ system: "sys", user: "user" }, custom, true);
+  const custom = normalizeSettings({ providerKeys: { deepseek: "sk-test" }, model: "deepseek-v4-pro" });
+  const body = buildRequestBody({ system: "sys", user: "user" }, custom, DS_CONFIG, true);
   check("custom-model", [body.model, body.temperature, body.stream], ["deepseek-v4-pro", 1.3, true]);
 
   // --- normalizeSettings ------------------------------------------------------
@@ -87,10 +98,16 @@ export async function run(): Promise<void> {
   check("garbage-input", normalizeSettings("garbage"), normalizeSettings(null));
   check("clamps-opacity-low", normalizeSettings({ opacity: 0 }).opacity, 0.1);
   check("clamps-font-size-low", normalizeSettings({ fontSize: 5 }).fontSize, 8);
-  check("invalid-model", normalizeSettings({ model: "gpt-4" }).model, "deepseek-v4-flash");
+  check("default-provider", normalizeSettings(null).provider, "deepseek");
+  check("default-model", normalizeSettings(null).model, "deepseek-v4-flash");
+  check("model-free-string", normalizeSettings({ model: "gpt-4" }).model, "gpt-4");
+  check("unknown-provider-falls-back", normalizeSettings({ provider: "deepl" }).provider, "deepseek");
+  check("known-provider-kept", normalizeSettings({ provider: "openrouter" }).provider, "openrouter");
   check("invalid-color", normalizeSettings({ color: "notacolor" }).color, "#a7a7a7");
   check("valid-color-3-digit", normalizeSettings({ color: "#fff" }).color, "#fff");
-  check("trims-api-key", normalizeSettings({ apiKey: "  sk-123  " }).apiKey, "sk-123");
+  check("trims-api-key", normalizeSettings({ apiKey: "  sk-123  " }).providerKeys.deepseek, "sk-123");
+  check("keeps-provider-keys", normalizeSettings({ providerKeys: { openrouter: "or-x", gemini: "g-x" } }).providerKeys.openrouter, "or-x");
+  check("trims-custom-base-url", normalizeSettings({ customBaseUrl: "  http://localhost:11434/v1  " }).customBaseUrl, "http://localhost:11434/v1");
   check("invalid-display-mode", normalizeSettings({ displayMode: "sideways" }).displayMode, "both");
   check("valid-display-mode", normalizeSettings({ displayMode: "original" }).displayMode, "original");
   check("language-lowercased", normalizeSettings({ targetLanguage: "ES" }).targetLanguage, "es");
@@ -100,7 +117,6 @@ export async function run(): Promise<void> {
     normalizeSettings({ temperature: 99, thinkingMode: true, reasoningEffort: "max", timeoutMs: 5000 }),
     normalizeSettings(null),
   );
-  check("model-list", DEEPSEEK_MODELS, ["deepseek-v4-flash", "deepseek-v4-pro"]);
   check("display-list", DISPLAY_MODES, ["original", "translation", "both"]);
   check(
     "language-list",
