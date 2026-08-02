@@ -9,7 +9,7 @@ Built with TypeScript + [Spicetify Creator](https://spicetify.app/docs/developme
 
 ## Screenshots
 
-*(Añade aquí una captura de Spotify con las letras traducidas — `screenshot.png` en la raíz del repo.)*
+![AI Lyrics Translator - Lirycs translated inside Spotify](screenshot.png)
 
 ## Features
 
