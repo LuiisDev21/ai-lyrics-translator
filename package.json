@@ -1,0 +1,22 @@
+{
+  "name": "ai-lyrics-translator",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Spicetify extension that translates Spotify lyrics in place using the official DeepSeek API.",
+  "scripts": {
+    "build": "spicetify-creator",
+    "build-local": "spicetify-creator --out=dist --minify",
+    "watch": "spicetify-creator --watch",
+    "typecheck": "tsc --noEmit",
+    "test": "esbuild tests/run-all.ts --bundle --platform=node --format=cjs --external:jsdom --outfile=test-build.cjs --log-level=error && node test-build.cjs"
+  },
+  "license": "MIT",
+  "devDependencies": {
+    "@types/jsdom": "^28.0.3",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "jsdom": "^30.0.1",
+    "spicetify-creator": "^1.0.17",
+    "typescript": "^5.6.3"
+  }
+}

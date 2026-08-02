@@ -1,0 +1,14 @@
+# Dependencies
+node_modules/
+
+# Build output (spicetify-creator writes to the Spicetify Extensions dir by default;
+# `npm run build-local` writes to ./dist)
+dist/
+test-build.cjs
+
+# Editor / OS
+.DS_Store
+*.log
+.vscode/*
+!.vscode/settings.json
+.idea/
